@@ -116,6 +116,9 @@ float Potentiometer::get_tot_angle(){
   return this->get_last_angle()+this->get_number_of_resets()*360;
 }
 
-float Potentiometer::get_assembly_angle(){
-  return this->get_tot_angle()/2;
+float Potentiometer::get_assembly_angle(bool hasTransmission){
+  if(hasTransmission){
+    return this->get_tot_angle()/2;
+  }
+  return this->get_tot_angle();
 }

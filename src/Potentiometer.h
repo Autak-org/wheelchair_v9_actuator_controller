@@ -29,6 +29,6 @@ class Potentiometer{
   float get_clamped_angle();
   void update();
   float get_tot_angle();
-  float get_assembly_angle();
+  float get_assembly_angle(bool hasTransmission);
 };
 #endif

@@ -21,6 +21,10 @@
 #define IN6 26
 #define POTENTIOMETER_1 33
 #define POTENTIOMETER_2 32
+#define POTENTIOMETER_3 39 //is 35 still available??? (31 is no ADC pin)
+
+#define BAT1 35
+#define BAT2 34
 
 #define TEMP_SENSOR_PIN 4
 
@@ -64,7 +68,7 @@ enum ACTUATOR_ACTION{
 };
 
 //Creates Potentiometer instances
-Potentiometer left_potentiometer(POTENTIOMETER_2), right_potentiometer(POTENTIOMETER_1);
+Potentiometer left_potentiometer(POTENTIOMETER_2), right_potentiometer(POTENTIOMETER_1), rear_potentiometer(POTENTIOMETER_3);
 
 /*---- These variables were created and are used according to the "MPU6050_6Axis_MotionApps20.h" library example "MPU6050_DMP6". 
 Refer library's documentation for more details.*/
@@ -95,6 +99,79 @@ void dmpDataReady() {
 ACTUATOR_ACTION footrest_state = ACTUATOR_STOP;
 ACTUATOR_ACTION backrest_state = ACTUATOR_STOP;
 ACTUATOR_ACTION seat_state = ACTUATOR_STOP;
+
+#define QUEUE_CAPACITY 40  // Define the capacity of the queue
+
+// Define the structure for the circular queue
+typedef struct {
+    uint8_t items[QUEUE_CAPACITY];  // Queue array to store elements
+    int front;                      // Front index
+    int rear;                       // Rear index
+    int size;                       // Current size of the queue
+} CircularQueue;
+
+void initializeQueue(CircularQueue* q);
+bool isFull(CircularQueue* q);
+bool isEmpty(CircularQueue* q);
+bool enqueue(CircularQueue* q, uint8_t value);
+uint8_t dequeue(CircularQueue* q);
+uint8_t average(CircularQueue* q);
+
+// Function to initialize the queue
+void initializeQueue(CircularQueue* q) {
+    q->front = 0;
+    q->rear = 0;
+    q->size = 0;
+}
+
+// Check if the queue is full
+bool isFull(CircularQueue* q) {
+    return q->size == QUEUE_CAPACITY;
+}
+
+// Check if the queue is empty
+bool isEmpty(CircularQueue* q) {
+    return q->size == 0;
+}
+
+// Enqueue an element to the queue
+bool enqueue(CircularQueue* q, uint8_t value) {
+    if (isFull(q)) {
+        return false;
+    }
+
+    q->items[q->rear] = value;
+    q->rear = (q->rear + 1) % QUEUE_CAPACITY;  // Wrap around
+    q->size++;
+    return true;
+}
+
+// Dequeue an element from the queue
+uint8_t dequeue(CircularQueue* q) {
+    if (isEmpty(q)) {
+        return 0;
+    }
+
+    uint8_t value = q->items[q->front];
+    q->front = (q->front + 1) % QUEUE_CAPACITY;  // Wrap around
+    q->size--;
+    return value;
+}
+
+uint8_t average(CircularQueue* q) {
+    if (isEmpty(q)) {
+        return 0.0;
+    }
+
+    int sum = 0;
+    int index = q->front;
+    for (int i = 0; i < q->size; i++) {
+        sum += q->items[index];
+        index = (index + 1) % QUEUE_CAPACITY;  // Wrap around
+    }
+
+    return (uint8_t)((float)sum / q->size);
+}
 
 /*-- getYawRoll() is a based on the "MPU6050_6Axis_MotionApps20.h" example "MPU6050_DMP6", and was modified according to
  the following YouTube video: "https://youtu.be/k5i-vE5rZR0?si=voIdb-SDxjW27zNN" by user "Maker's Wharf" --*/
@@ -129,7 +206,7 @@ void setActuatorAction(ACTUATOR actuator, ACTUATOR_ACTION action){
     ina = IN3; inb = IN4;
   }
   else if(actuator == SEAT_ACTUATOR){
-    ina = IN5; inb = IN6;
+    //ina = IN5; inb = IN6;
   }
 
   //This lazy-update version doesn't change the bucking behavior of the actuators
@@ -291,6 +368,58 @@ twai_message_t construct_transmitted_message(int id, int value){
   return constructed_message;
 }
 
+void getVoltages(float *bat1, float *bat2){
+  int analogReadVal1 = analogRead(BAT1);
+  int analogReadVal2 = analogRead(BAT2);
+
+  //All calculations derived from measurements done on the voltage translator (plus offset seen on esp)
+  float translatedValue1 = analogReadVal1*3.3f/4095+0.02f;
+  float voltage_1 = translatedValue1*25/3.125;
+
+  float translatedValue2 = analogReadVal2*3.3f/4095+0.08f;
+  float voltage_2 = translatedValue2*51/3.09-voltage_1;
+
+  Serial.print("Voltage: ");
+  Serial.print(translatedValue1);
+  Serial.print(", ");
+  Serial.print(translatedValue2);
+  Serial.print(" ");
+  *bat1 = voltage_1;
+  *bat2 = voltage_2;
+}
+
+uint8_t getBatteryCharge(float voltage){
+  //Implements curve from tattu battery documentation
+  if(voltage > 23.7){
+    //upper linearized slope
+    return 80+(int8_t)((voltage-23.7)/0.075f);
+  }else if(voltage > 22.7){
+    //middle linearized slope
+    return 50+(int8_t)((voltage-22.7)/0.03333f);
+  }else if(voltage > 21.8){
+    //lower linearized slope
+    return 10+(int8_t)((voltage-21.8)/0.0225f);
+  }else{
+    //forbidden zone
+    return 0;
+  }
+}
+
+void getBatteryCharges(uint8_t *charge1, uint8_t *charge2){
+  float v1, v2;
+  getVoltages(&v1, &v2);
+
+  Serial.print("Voltages: ");
+  Serial.print(v1);
+  Serial.print(", ");
+  Serial.print(v2);
+  Serial.print(" ");
+
+  //bat1
+  *charge1 = getBatteryCharge(v1);
+  *charge2 = getBatteryCharge(v2);
+}
+
 void setup() {
   //Initialize the pins and set them to LOW to avoid unexpected behavior
   pinMode(IN1, OUTPUT);
@@ -302,6 +431,10 @@ void setup() {
 
   pinMode(POTENTIOMETER_1, INPUT);
   pinMode(POTENTIOMETER_2, INPUT);
+
+  //for battery charge reading
+  pinMode(BAT1, INPUT);
+  pinMode(BAT2, INPUT);
 
   digitalWrite(IN1, LOW);
   digitalWrite(IN2, LOW);
@@ -318,6 +451,51 @@ void setup() {
   Serial.begin(115200);
   while(!Serial);
   
+  CircularQueue bat1_charges;
+  CircularQueue bat2_charges;
+  initializeQueue(&bat1_charges);
+  initializeQueue(&bat2_charges);
+
+  uint8_t c1_avg = 0;
+  uint8_t c2_avg = 0;
+
+  /*while(true){
+    uint8_t c1, c2;
+    getBatteryCharges(&c1, &c2);
+    if(!isFull(&bat1_charges)){
+      enqueue(&bat1_charges, c1);
+      if(bat1_charges.size == 1){
+        c1_avg = c1;
+      }else{
+        //c1_avg = c1_avg*(bat1_charges.size-1)/((float)bat1_charges.size)+c1/(float)bat1_charges.size;
+        Serial.println(c1_avg);
+      }
+    }
+    if(!isFull(&bat2_charges)){
+      enqueue(&bat2_charges, c2);
+      if(bat2_charges.size == 1){
+        c2_avg = c2;
+      }else{
+        //c2_avg = c2_avg*(bat2_charges.size-1)/((float)bat2_charges.size)+c2/(float)bat2_charges.size;
+        Serial.println(c2_avg);
+      }
+    }
+    if(isFull(&bat1_charges) && isFull(&bat2_charges)){
+      uint8_t old_1 = dequeue(&bat1_charges);
+      uint8_t old_2 = dequeue(&bat2_charges);
+      enqueue(&bat1_charges, c1);
+      enqueue(&bat2_charges, c2);
+
+      //c1_avg = (uint8_t)((float)c1_avg-old_1/20.0f+c1/20.0f);
+      //c2_avg = (uint8_t)((float)c2_avg-old_2/20.0f+c2/20.0f);
+
+      Serial.print("Charges: ");
+      Serial.print(average(&bat1_charges));
+      Serial.print(", ");
+      Serial.println(average(&bat2_charges));
+    }
+  }*/
+
   //Initialize temperature sensor
   temp_sensor.begin();
 
@@ -382,11 +560,12 @@ void setup() {
   //Init potis to not start in some crazy state
   left_potentiometer.reset_degree_offset();
   right_potentiometer.reset_degree_offset();
-  Serial.println("Initialized potis to:");
-  Serial.print("Left: ");
+  rear_potentiometer.reset_degree_offset();
+  Serial.println("Initialized potis");
+  /*Serial.print("Left: ");
   Serial.print(left_potentiometer.get_assembly_angle());
   Serial.print("Right: ");
-  Serial.print(right_potentiometer.get_assembly_angle());
+  Serial.print(right_potentiometer.get_assembly_angle());*/
 }
 
 void printBin8(uint8_t aByte) {
@@ -497,6 +676,7 @@ void loop() {
       //reset offset message received
       left_potentiometer.reset_degree_offset();
       right_potentiometer.reset_degree_offset();
+      rear_potentiometer.reset_degree_offset();
       Serial.println("Reset potis");
     }
     else{
@@ -529,10 +709,11 @@ void loop() {
   if(millis() - startingTime > 200){
 
     //transmit angles
-    float l_angle = -left_potentiometer.get_assembly_angle(); //Invert left angle to make both measure "forward"
-    float r_angle = right_potentiometer.get_assembly_angle();
-    //Serial.print("Left: ");
-    //Serial.println(l_angle);
+    float l_angle = -left_potentiometer.get_assembly_angle(true); //Invert left angle to make both measure "forward"
+    float r_angle = right_potentiometer.get_assembly_angle(true);
+    float re_angle = rear_potentiometer.get_assembly_angle(false); //has no transmission, is 1:1
+    Serial.print("Rear: ");
+    Serial.println(re_angle);
     //Serial.println(right_potentiometer.get_angle_degrees());
     //Serial.println(right_potentiometer.get_voltage_level());
     //Serial.print("Right: ");
@@ -540,21 +721,32 @@ void loop() {
 
     unsigned short l_angle_16 = float32_to_float16(l_angle);
     unsigned short r_angle_16 = float32_to_float16(r_angle);
+    unsigned short re_angle_16 = float32_to_float16(re_angle);
 
-
-    twai_message_t angle_message= {
+    //Old 4 byte message
+    /*twai_message_t angle_message= {
       //For some reason, compiler is unable to initialize union
       /*
       .extd = 1,
       .rtr = 0,
       .ss = 0,
       .self = 0,
-      .dlc_non_comp = 0,*/
+      .dlc_non_comp = 0,
       .flags = (1 << 0),
       .identifier = 99 + 7,
       .data_length_code = 4,
       .data = {(r_angle_16 >> 8) & 0xFF, (r_angle_16) & 0xFF, (l_angle_16 >> 8) & 0xFF, (l_angle_16) & 0xFF},
+    };*/
+
+    twai_message_t angle_message= {
+      //For some reason, compiler is unable to initialize union
+      .flags = (1 << 0),
+      .identifier = 99 + 7,
+      .data_length_code = 8,
+      .data = {(r_angle_16 >> 8) & 0xFF, (r_angle_16) & 0xFF, (l_angle_16 >> 8) & 0xFF, (l_angle_16) & 0xFF, (re_angle_16 >> 8) & 0xFF, (re_angle_16) & 0xFF, 0, 0}, //Fill upper bytes later with battery data
     };
+
+
     if(twai_transmit(&angle_message, pdMS_TO_TICKS(10)) == ESP_OK){
       //Serial.println("Sent angles");
     }
@@ -602,4 +794,5 @@ void loop() {
 void updatePotis(){
   left_potentiometer.update();
   right_potentiometer.update();
+  rear_potentiometer.update();
 }

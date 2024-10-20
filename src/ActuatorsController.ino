@@ -94,6 +94,7 @@ void dmpDataReady() {
 
 ACTUATOR_ACTION footrest_state = ACTUATOR_STOP;
 ACTUATOR_ACTION backrest_state = ACTUATOR_STOP;
+ACTUATOR_ACTION seat_state = ACTUATOR_STOP;
 
 /*-- getYawRoll() is a based on the "MPU6050_6Axis_MotionApps20.h" example "MPU6050_DMP6", and was modified according to
  the following YouTube video: "https://youtu.be/k5i-vE5rZR0?si=voIdb-SDxjW27zNN" by user "Maker's Wharf" --*/
@@ -142,12 +143,13 @@ void setActuatorAction(ACTUATOR actuator, ACTUATOR_ACTION action){
     }
   }
   else if (action == ACTUATOR_RETRACT){
-    if(actuator == FOOTREST_ACTUATOR && footrest_state != ACTUATOR_RETRACT || actuator == BACKREST_ACTUATOR && backrest_state != ACTUATOR_RETRACT){
+    if(actuator == FOOTREST_ACTUATOR && footrest_state != ACTUATOR_RETRACT || actuator == BACKREST_ACTUATOR && backrest_state != ACTUATOR_RETRACT || actuator == SEAT_ACTUATOR && seat_state != ACTUATOR_RETRACT){
       digitalWrite(ina, LOW);
       digitalWrite(inb, HIGH);
 
       if(actuator == FOOTREST_ACTUATOR) footrest_state = ACTUATOR_RETRACT;
       if(actuator == BACKREST_ACTUATOR) backrest_state = ACTUATOR_RETRACT;
+      if(actuator == SEAT_ACTUATOR) seat_state = ACTUATOR_RETRACT;
     }
   }
   else if(action == ACTUATOR_STOP){
@@ -156,6 +158,7 @@ void setActuatorAction(ACTUATOR actuator, ACTUATOR_ACTION action){
 
     if(actuator == FOOTREST_ACTUATOR) footrest_state = ACTUATOR_STOP;
     if(actuator == BACKREST_ACTUATOR) backrest_state = ACTUATOR_STOP;
+    if(actuator == SEAT_ACTUATOR) seat_state = ACTUATOR_STOP;
   }
 };
 
@@ -210,10 +213,17 @@ void process_twai_message(twai_message_t message){
   */
   if(message.identifier != TWAI_ID) return;
   uint8_t actuators_command = message.data[0];
+  Serial.print(message.data[0]); //8 or 4: 1000 0100
+  Serial.print(" ");
+  Serial.println(message.data[1]);
   uint8_t footrest_command, backrest_command;
   footrest_command = actuators_command & 0b11; //mask footrest part of message
   actuators_command = actuators_command >> 2;
   backrest_command = actuators_command & 0b11;
+
+  uint8_t seat_command = message.data[1];
+  seat_command = seat_command & 0b11;
+
   if(footrest_command == 0b01){
     setActuatorAction(FOOTREST_ACTUATOR, ACTUATOR_EXTEND);
     Serial.println("Extending footrest");
@@ -222,7 +232,7 @@ void process_twai_message(twai_message_t message){
     Serial.println("Retracting footrest");
   }else{
     setActuatorAction(FOOTREST_ACTUATOR, ACTUATOR_STOP);
-    Serial.println("Stopping footrest");
+    //Serial.println("Stopping footrest");
   }
   /*if(backrest_command == 0b01){
     setActuatorAction(BACKREST_ACTUATOR, ACTUATOR_EXTEND);
@@ -235,6 +245,23 @@ void process_twai_message(twai_message_t message){
     Serial.println("Stopping backrest");
   }*/
   //Problem with this: Multiple commands can be send in 1 message, but only the backrest will actually be processed
+
+  //seat actuator stuff
+
+  if(seat_command != 0){
+    Serial.println("Moving seat");
+  }
+
+  if(seat_command == 0b01){
+    //setActuatorAction(FOOTREST_ACTUATOR, ACTUATOR_EXTEND);
+    //Serial.println("Extending footrest");
+  }else if(seat_command == 0b10){
+    setActuatorAction(SEAT_ACTUATOR, ACTUATOR_RETRACT);
+    //Serial.println("Retracting footrest");
+  }else{
+    setActuatorAction(SEAT_ACTUATOR, ACTUATOR_STOP);
+    //Serial.println("Stopping footrest");
+  }
 }
 
 twai_message_t construct_transmitted_message(int id, int value){
@@ -296,12 +323,12 @@ void setup() {
 
   /* --- This section of code was taken from the "MPU6050_6Axis_MotionApps20.h" library example "MPU6050_DMP6" and initialized the MPU6050 ---*/
   //Initializing Device
-  Serial.println(F("Initializing I2C devices..."));
-  mpu.initialize();
+  /*Serial.println(F("Initializing I2C devices..."));
+  mpu.initialize();*/
   pinMode(INTERRUPT_PIN, INPUT);
 
   //verify connection
-  Serial.println(F("Testing device connections..."));
+  /*Serial.println(F("Testing device connections..."));
   Serial.println(mpu.testConnection()? F("MPU6050 connection succesful") : F("MPU6050 connection failed"));
 
   //Load and configure the DMP
@@ -312,12 +339,12 @@ void setup() {
   mpu.setXGyroOffset(220);
   mpu.setYGyroOffset(76);
   mpu.setZGyroOffset(-85);
-  mpu.setZAccelOffset(1788);
+  mpu.setZAccelOffset(1788);*/
 
   //Make sure it worked
   if(devStatus == 0){
     // Calibration Time: generate offsets and calibrate our MPU6050
-    mpu.CalibrateAccel(6);
+    /*mpu.CalibrateAccel(6);
     mpu.CalibrateGyro(6);
     mpu.PrintActiveOffsets();
     // turn on the DMP, now that it's ready
@@ -336,7 +363,7 @@ void setup() {
     dmpReady = true;
 
     // get expected DMP packet size for later comparison
-    packetSize = mpu.dmpGetFIFOPacketSize();
+    packetSize = mpu.dmpGetFIFOPacketSize();*/
   }
   else{
     Serial.print(F("DMP Initialization failed (code"));
@@ -351,6 +378,15 @@ void setup() {
 
   if(twai_start() == ESP_OK) Serial.println(F("TWAI driver started successfully"));
   else Serial.println(F("Failed to start TWAI driver"));
+
+  //Init potis to not start in some crazy state
+  left_potentiometer.reset_degree_offset();
+  right_potentiometer.reset_degree_offset();
+  Serial.println("Initialized potis to:");
+  Serial.print("Left: ");
+  Serial.print(left_potentiometer.get_assembly_angle());
+  Serial.print("Right: ");
+  Serial.print(right_potentiometer.get_assembly_angle());
 }
 
 void printBin8(uint8_t aByte) {
@@ -363,6 +399,40 @@ void printBin32(uint32_t aByte) {
   for (int8_t aBit = 31; aBit > 0; aBit--)
     Serial.write(bitRead(aByte, aBit) ? '1' : '0');
   Serial.println(bitRead(aByte, 0) ? '1' : '0');
+}
+
+uint16_t float32_to_float16(float f) {
+    uint32_t f32 = *(uint32_t*)&f;  // Interpret float as a 32-bit unsigned integer
+
+    uint32_t sign = (f32 >> 31) & 0x1;
+    uint32_t exponent = (f32 >> 23) & 0xFF;
+    uint32_t mantissa = f32 & 0x7FFFFF;
+
+    // Handle special cases (NaN, Inf, Zero)
+    if (exponent == 255) { // Inf or NaN
+        if (mantissa == 0) {
+            // Infinity
+            return (sign << 15) | (0x1F << 10);
+        } else {
+            // NaN
+            return (sign << 15) | (0x1F << 10) | (mantissa >> 13);
+        }
+    }
+
+    if (exponent == 0) { // Zero or subnormal number
+        return sign << 15; // Return signed zero
+    }
+
+    // Normalized number
+    int16_t new_exponent = exponent - 127 + 15; // Rebase the exponent
+    if (new_exponent >= 0x1F) { // Overflow, represent as infinity
+        return (sign << 15) | (0x1F << 10);
+    } else if (new_exponent <= 0) { // Underflow, represent as zero
+        return sign << 15;
+    }
+
+    uint16_t new_mantissa = mantissa >> 13; // Truncate mantissa to 10 bits
+    return (sign << 15) | (new_exponent << 10) | new_mantissa;
 }
 
 void loop() {
@@ -410,51 +480,95 @@ void loop() {
   }
 
   //Read the messages in the TWAI bus and process accordingly
-  esp_err_t receiveResult = twai_receive(&received_message, pdMS_TO_TICKS(20));
+  esp_err_t receiveResult = twai_receive(&received_message, pdMS_TO_TICKS(40));
   if(receiveResult == ESP_OK){
     if(received_message.identifier == 99){
-      Serial.print(received_message.identifier);
-      Serial.print("-");
-      Serial.print(received_message.data_length_code);
-      Serial.print("-");
-      Serial.print(received_message.data[0]);
-      Serial.print(received_message.data[1]);
+      //Serial.print(received_message.identifier);
+      //Serial.print("-");
+      //Serial.print(received_message.data_length_code);
+      //Serial.print("-");
+      //Serial.println(received_message.data[0]);
+      /*Serial.print(received_message.data[1]);
       Serial.print(received_message.data[2]);
-      Serial.println(received_message.data[3]);
-    }else{
-      Serial.println(received_message.identifier);
+      Serial.println(received_message.data[3]);*/
+
+      process_twai_message(received_message);
+    }else if(received_message.identifier == 66){
+      //reset offset message received
+      left_potentiometer.reset_degree_offset();
+      right_potentiometer.reset_degree_offset();
+      Serial.println("Reset potis");
+    }
+    else{
+      /*Serial.println(received_message.identifier);
       printBin32(received_message.identifier);
-      printBin8(received_message.data[0]);
+      printBin8(received_message.data[0]);*/
       //printBin8(received_message.data[1]);
       //printBin8(received_message.data[3]);
       //printBin8(received_message.data[4]);
     }
-    process_twai_message(received_message);
 
     //Send ready message
     twai_message_t transmitted_message = construct_transmitted_message(4, 4);
     if(twai_transmit(&transmitted_message, pdMS_TO_TICKS(10)) == ESP_OK){
-      Serial.println("Ready");
+      //Serial.println("Ready");
     }
   }else{
-    Serial.println("Could not receive TWAI message");
+    //Serial.print("Could not receive TWAI message, error: ");
+    //Serial.println(receiveResult);
     setActuatorAction(FOOTREST_ACTUATOR, ACTUATOR_STOP);
     setActuatorAction(BACKREST_ACTUATOR, ACTUATOR_STOP);
+
+    /*twai_driver_uninstall();
+    twai_driver_install(&g_config, &t_config, &f_config);
+    if(twai_start() == ESP_OK) Serial.println(F("TWAI driver started succesfully"));
+    else Serial.println(F("Failed to start TWAI driver"));*/
   }
 
   //Transmit TWAI messages for battery voltage levels and temperature. The messages get sent in a circular queue, every 200ms
   if(millis() - startingTime > 200){
 
-    //Send ready message
-    twai_message_t transmitted_message = construct_transmitted_message(4, 4);
-    if(twai_transmit(&transmitted_message, pdMS_TO_TICKS(10)) == ESP_OK){
-      Serial.println("Ready");
+    //transmit angles
+    float l_angle = -left_potentiometer.get_assembly_angle(); //Invert left angle to make both measure "forward"
+    float r_angle = right_potentiometer.get_assembly_angle();
+    //Serial.print("Left: ");
+    //Serial.println(l_angle);
+    //Serial.println(right_potentiometer.get_angle_degrees());
+    //Serial.println(right_potentiometer.get_voltage_level());
+    //Serial.print("Right: ");
+    //Serial.println(r_angle);
+
+    unsigned short l_angle_16 = float32_to_float16(l_angle);
+    unsigned short r_angle_16 = float32_to_float16(r_angle);
+
+
+    twai_message_t angle_message= {
+      //For some reason, compiler is unable to initialize union
+      /*
+      .extd = 1,
+      .rtr = 0,
+      .ss = 0,
+      .self = 0,
+      .dlc_non_comp = 0,*/
+      .flags = (1 << 0),
+      .identifier = 99 + 7,
+      .data_length_code = 4,
+      .data = {(r_angle_16 >> 8) & 0xFF, (r_angle_16) & 0xFF, (l_angle_16 >> 8) & 0xFF, (l_angle_16) & 0xFF},
+    };
+    if(twai_transmit(&angle_message, pdMS_TO_TICKS(10)) == ESP_OK){
+      //Serial.println("Sent angles");
     }
 
-    if(voltage1Transmit && !voltage2Transmit && !tempTransmit){
+    //Send ready message only if nothing else is to be sent
+    /*twai_message_t transmitted_message = construct_transmitted_message(4, 4);
+    if(twai_transmit(&transmitted_message, pdMS_TO_TICKS(10)) == ESP_OK){
+      //Serial.println("Ready");
+    }*/
+
+    /*if(voltage1Transmit && !voltage2Transmit && !tempTransmit){
       twai_message_t transmitted_message = construct_transmitted_message(1, 20);
       if(twai_transmit(&transmitted_message, pdMS_TO_TICKS(10)) == ESP_OK){
-        Serial.println("Battery 1 status transmitted");
+        //Serial.println("Battery 1 status transmitted");
         voltage1Transmit = false;
         voltage2Transmit = true;
         tempTransmit = false;
@@ -463,7 +577,7 @@ void loop() {
     else if(!voltage1Transmit && voltage2Transmit && !tempTransmit){
       twai_message_t transmitted_message = construct_transmitted_message(2, 5);
       if(twai_transmit(&transmitted_message, pdMS_TO_TICKS(10)) == ESP_OK){
-        Serial.println("Battery 2 status transmitted");
+        //Serial.println("Battery 2 status transmitted");
         voltage1Transmit = false;
         voltage2Transmit = false;
         tempTransmit = true;
@@ -472,36 +586,20 @@ void loop() {
     else if(!voltage1Transmit && !voltage2Transmit && tempTransmit){
       twai_message_t transmitted_message = construct_transmitted_message(3, round(temp_celcius));
       if(twai_transmit(&transmitted_message, pdMS_TO_TICKS(10)) == ESP_OK){
-        Serial.println("Temperature status transmitted");
+        //Serial.println("Temperature status transmitted");
         voltage1Transmit = true;
         voltage2Transmit = false;
         tempTransmit = false;
       }
-    }
+    }*/
 
     startingTime = millis();
   }
 
+  updatePotis();
+}
 
-
-  /*Serial.print("Potentiometer 1 Pin Number:");
-  int lppn = left_potentiometer.get_pin_number();
-  Serial.print(lppn);
-  Serial.print(" | Potentiometer 1 resets:");
-  int lprst = left_potentiometer.get_number_of_resets();
-  Serial.print(lprst);
-  Serial.print(" | Potentiometer 1 Angle:");
-  float lpad = left_potentiometer.get_angle_degrees();
-  Serial.print(lpad);
-  Serial.println("°");
-  Serial.print("Potentiometer 2 Pin Number:");
-  int rppn = right_potentiometer.get_pin_number();
-  Serial.print(rppn);
-  Serial.print(" | Potentiometer 2 resets:");
-  int rprst = right_potentiometer.get_number_of_resets();
-  Serial.print(rprst);
-  Serial.print(" | Potentiometer 2 Angle:");
-  float rpad = right_potentiometer.get_angle_degrees();
-  Serial.print(rpad);
-  Serial.println("°");*/
+void updatePotis(){
+  left_potentiometer.update();
+  right_potentiometer.update();
 }

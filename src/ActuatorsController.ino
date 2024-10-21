@@ -5,6 +5,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "Potentiometer.h"
+#include "CircularQueue.h"
 
 //Interupt and LED pins not used
 #define INTERRUPT_PIN -1
@@ -100,78 +101,6 @@ ACTUATOR_ACTION footrest_state = ACTUATOR_STOP;
 ACTUATOR_ACTION backrest_state = ACTUATOR_STOP;
 ACTUATOR_ACTION seat_state = ACTUATOR_STOP;
 
-#define QUEUE_CAPACITY 40  // Define the capacity of the queue
-
-// Define the structure for the circular queue
-typedef struct {
-    uint8_t items[QUEUE_CAPACITY];  // Queue array to store elements
-    int front;                      // Front index
-    int rear;                       // Rear index
-    int size;                       // Current size of the queue
-} CircularQueue;
-
-void initializeQueue(CircularQueue* q);
-bool isFull(CircularQueue* q);
-bool isEmpty(CircularQueue* q);
-bool enqueue(CircularQueue* q, uint8_t value);
-uint8_t dequeue(CircularQueue* q);
-uint8_t average(CircularQueue* q);
-
-// Function to initialize the queue
-void initializeQueue(CircularQueue* q) {
-    q->front = 0;
-    q->rear = 0;
-    q->size = 0;
-}
-
-// Check if the queue is full
-bool isFull(CircularQueue* q) {
-    return q->size == QUEUE_CAPACITY;
-}
-
-// Check if the queue is empty
-bool isEmpty(CircularQueue* q) {
-    return q->size == 0;
-}
-
-// Enqueue an element to the queue
-bool enqueue(CircularQueue* q, uint8_t value) {
-    if (isFull(q)) {
-        return false;
-    }
-
-    q->items[q->rear] = value;
-    q->rear = (q->rear + 1) % QUEUE_CAPACITY;  // Wrap around
-    q->size++;
-    return true;
-}
-
-// Dequeue an element from the queue
-uint8_t dequeue(CircularQueue* q) {
-    if (isEmpty(q)) {
-        return 0;
-    }
-
-    uint8_t value = q->items[q->front];
-    q->front = (q->front + 1) % QUEUE_CAPACITY;  // Wrap around
-    q->size--;
-    return value;
-}
-
-uint8_t average(CircularQueue* q) {
-    if (isEmpty(q)) {
-        return 0.0;
-    }
-
-    int sum = 0;
-    int index = q->front;
-    for (int i = 0; i < q->size; i++) {
-        sum += q->items[index];
-        index = (index + 1) % QUEUE_CAPACITY;  // Wrap around
-    }
-
-    return (uint8_t)((float)sum / q->size);
-}
 
 /*-- getYawRoll() is a based on the "MPU6050_6Axis_MotionApps20.h" example "MPU6050_DMP6", and was modified according to
  the following YouTube video: "https://youtu.be/k5i-vE5rZR0?si=voIdb-SDxjW27zNN" by user "Maker's Wharf" --*/
@@ -359,9 +288,9 @@ twai_message_t construct_transmitted_message(int id, int value){
     .self = 0,
     .dlc_non_comp = 0,*/
     .flags = (1 << 0),
-    .identifier = 99 + id,
+    .identifier = (uint32_t)(99 + id),
     .data_length_code = 4,
-    .data = {((int32_t)value >> 24) & 0xFF, ((int32_t)value >> 16) & 0xFF, ((int32_t)value >> 8) & 0xFF, ((int32_t)value) & 0xFF},
+    .data = {(uint8_t)(((int32_t)value >> 24) & 0xFF), (uint8_t)(((int32_t)value >> 16) & 0xFF), (uint8_t)(((int32_t)value >> 8) & 0xFF), (uint8_t)(((int32_t)value) & 0xFF)},
   };
 
   //ID 1 means battery 1 status, ID 2 means battery 2 status and ID 3 means temperature sensor status
@@ -453,8 +382,6 @@ void setup() {
   
   CircularQueue bat1_charges;
   CircularQueue bat2_charges;
-  initializeQueue(&bat1_charges);
-  initializeQueue(&bat2_charges);
 
   uint8_t c1_avg = 0;
   uint8_t c2_avg = 0;
@@ -462,37 +389,37 @@ void setup() {
   /*while(true){
     uint8_t c1, c2;
     getBatteryCharges(&c1, &c2);
-    if(!isFull(&bat1_charges)){
-      enqueue(&bat1_charges, c1);
-      if(bat1_charges.size == 1){
+    if(!bat1_charges.isFull()){
+      bat1_charges.enqueue(c1);
+      if(bat1_charges.getSize() == 1){
         c1_avg = c1;
       }else{
         //c1_avg = c1_avg*(bat1_charges.size-1)/((float)bat1_charges.size)+c1/(float)bat1_charges.size;
         Serial.println(c1_avg);
       }
     }
-    if(!isFull(&bat2_charges)){
-      enqueue(&bat2_charges, c2);
-      if(bat2_charges.size == 1){
+    if(!bat2_charges.isFull()){
+      bat2_charges.enqueue(c2);
+      if(bat2_charges.getSize() == 1){
         c2_avg = c2;
       }else{
         //c2_avg = c2_avg*(bat2_charges.size-1)/((float)bat2_charges.size)+c2/(float)bat2_charges.size;
         Serial.println(c2_avg);
       }
     }
-    if(isFull(&bat1_charges) && isFull(&bat2_charges)){
-      uint8_t old_1 = dequeue(&bat1_charges);
-      uint8_t old_2 = dequeue(&bat2_charges);
-      enqueue(&bat1_charges, c1);
-      enqueue(&bat2_charges, c2);
+    if(bat1_charges.isFull() && bat2_charges.isFull()){
+      uint8_t old_1 = bat1_charges.dequeue();
+      uint8_t old_2 = bat2_charges.dequeue();
+      bat1_charges.enqueue(c1);
+      bat2_charges.enqueue(c2);
 
       //c1_avg = (uint8_t)((float)c1_avg-old_1/20.0f+c1/20.0f);
       //c2_avg = (uint8_t)((float)c2_avg-old_2/20.0f+c2/20.0f);
 
       Serial.print("Charges: ");
-      Serial.print(average(&bat1_charges));
+      Serial.print(bat1_charges.average());
       Serial.print(", ");
-      Serial.println(average(&bat2_charges));
+      Serial.println(bat2_charges.average());
     }
   }*/
 
@@ -743,7 +670,7 @@ void loop() {
       .flags = (1 << 0),
       .identifier = 99 + 7,
       .data_length_code = 8,
-      .data = {(r_angle_16 >> 8) & 0xFF, (r_angle_16) & 0xFF, (l_angle_16 >> 8) & 0xFF, (l_angle_16) & 0xFF, (re_angle_16 >> 8) & 0xFF, (re_angle_16) & 0xFF, 0, 0}, //Fill upper bytes later with battery data
+      .data = {(uint8_t)((r_angle_16 >> 8) & 0xFF), (uint8_t)((r_angle_16) & 0xFF), (uint8_t)((l_angle_16 >> 8) & 0xFF), (uint8_t)((l_angle_16) & 0xFF), (uint8_t)((re_angle_16 >> 8) & 0xFF), (uint8_t)((re_angle_16) & 0xFF), 0, 0}, //Fill upper bytes later with battery data
     };
 
 

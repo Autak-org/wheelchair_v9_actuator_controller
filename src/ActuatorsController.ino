@@ -71,6 +71,9 @@ enum ACTUATOR_ACTION{
 //Creates Potentiometer instances
 Potentiometer left_potentiometer(POTENTIOMETER_2), right_potentiometer(POTENTIOMETER_1), rear_potentiometer(POTENTIOMETER_3);
 
+//Needed for running average of measured charges
+CircularQueue bat1_charges, bat2_charges;
+
 /*---- These variables were created and are used according to the "MPU6050_6Axis_MotionApps20.h" library example "MPU6050_DMP6". 
 Refer library's documentation for more details.*/
 bool blinkState = false;
@@ -308,11 +311,11 @@ void getVoltages(float *bat1, float *bat2){
   float translatedValue2 = analogReadVal2*3.3f/4095+0.08f;
   float voltage_2 = translatedValue2*51/3.09-voltage_1;
 
-  Serial.print("Voltage: ");
+  /*Serial.print("Voltage: ");
   Serial.print(translatedValue1);
   Serial.print(", ");
   Serial.print(translatedValue2);
-  Serial.print(" ");
+  Serial.print(" ");*/
   *bat1 = voltage_1;
   *bat2 = voltage_2;
 }
@@ -338,13 +341,6 @@ void getBatteryCharges(uint8_t *charge1, uint8_t *charge2){
   float v1, v2;
   getVoltages(&v1, &v2);
 
-  Serial.print("Voltages: ");
-  Serial.print(v1);
-  Serial.print(", ");
-  Serial.print(v2);
-  Serial.print(" ");
-
-  //bat1
   *charge1 = getBatteryCharge(v1);
   *charge2 = getBatteryCharge(v2);
 }
@@ -379,49 +375,6 @@ void setup() {
   //Initialize Serial Monitor
   Serial.begin(115200);
   while(!Serial);
-  
-  CircularQueue bat1_charges;
-  CircularQueue bat2_charges;
-
-  uint8_t c1_avg = 0;
-  uint8_t c2_avg = 0;
-
-  /*while(true){
-    uint8_t c1, c2;
-    getBatteryCharges(&c1, &c2);
-    if(!bat1_charges.isFull()){
-      bat1_charges.enqueue(c1);
-      if(bat1_charges.getSize() == 1){
-        c1_avg = c1;
-      }else{
-        //c1_avg = c1_avg*(bat1_charges.size-1)/((float)bat1_charges.size)+c1/(float)bat1_charges.size;
-        Serial.println(c1_avg);
-      }
-    }
-    if(!bat2_charges.isFull()){
-      bat2_charges.enqueue(c2);
-      if(bat2_charges.getSize() == 1){
-        c2_avg = c2;
-      }else{
-        //c2_avg = c2_avg*(bat2_charges.size-1)/((float)bat2_charges.size)+c2/(float)bat2_charges.size;
-        Serial.println(c2_avg);
-      }
-    }
-    if(bat1_charges.isFull() && bat2_charges.isFull()){
-      uint8_t old_1 = bat1_charges.dequeue();
-      uint8_t old_2 = bat2_charges.dequeue();
-      bat1_charges.enqueue(c1);
-      bat2_charges.enqueue(c2);
-
-      //c1_avg = (uint8_t)((float)c1_avg-old_1/20.0f+c1/20.0f);
-      //c2_avg = (uint8_t)((float)c2_avg-old_2/20.0f+c2/20.0f);
-
-      Serial.print("Charges: ");
-      Serial.print(bat1_charges.average());
-      Serial.print(", ");
-      Serial.println(bat2_charges.average());
-    }
-  }*/
 
   //Initialize temperature sensor
   temp_sensor.begin();
@@ -638,7 +591,7 @@ void loop() {
     //transmit angles
     float l_angle = -left_potentiometer.get_assembly_angle(true); //Invert left angle to make both measure "forward"
     float r_angle = right_potentiometer.get_assembly_angle(true);
-    float re_angle = rear_potentiometer.get_assembly_angle(false); //has no transmission, is 1:1
+    float re_angle = -rear_potentiometer.get_assembly_angle(false); //has no transmission, is 1:1. Also inverted
     Serial.print("Rear: ");
     Serial.println(re_angle);
     //Serial.println(right_potentiometer.get_angle_degrees());
@@ -650,27 +603,12 @@ void loop() {
     unsigned short r_angle_16 = float32_to_float16(r_angle);
     unsigned short re_angle_16 = float32_to_float16(re_angle);
 
-    //Old 4 byte message
-    /*twai_message_t angle_message= {
-      //For some reason, compiler is unable to initialize union
-      /*
-      .extd = 1,
-      .rtr = 0,
-      .ss = 0,
-      .self = 0,
-      .dlc_non_comp = 0,
-      .flags = (1 << 0),
-      .identifier = 99 + 7,
-      .data_length_code = 4,
-      .data = {(r_angle_16 >> 8) & 0xFF, (r_angle_16) & 0xFF, (l_angle_16 >> 8) & 0xFF, (l_angle_16) & 0xFF},
-    };*/
-
     twai_message_t angle_message= {
       //For some reason, compiler is unable to initialize union
       .flags = (1 << 0),
       .identifier = 99 + 7,
       .data_length_code = 8,
-      .data = {(uint8_t)((r_angle_16 >> 8) & 0xFF), (uint8_t)((r_angle_16) & 0xFF), (uint8_t)((l_angle_16 >> 8) & 0xFF), (uint8_t)((l_angle_16) & 0xFF), (uint8_t)((re_angle_16 >> 8) & 0xFF), (uint8_t)((re_angle_16) & 0xFF), 0, 0}, //Fill upper bytes later with battery data
+      .data = {(uint8_t)((r_angle_16 >> 8) & 0xFF), (uint8_t)((r_angle_16) & 0xFF), (uint8_t)((l_angle_16 >> 8) & 0xFF), (uint8_t)((l_angle_16) & 0xFF), (uint8_t)((re_angle_16 >> 8) & 0xFF), (uint8_t)((re_angle_16) & 0xFF), bat1_charges.average(), bat2_charges.average()}, //Fill upper bytes later with battery data
     };
 
 
@@ -716,10 +654,28 @@ void loop() {
   }
 
   updatePotis();
+  updateBatteries();
 }
 
 void updatePotis(){
   left_potentiometer.update();
   right_potentiometer.update();
   rear_potentiometer.update();
+}
+
+void updateBatteries(){
+  uint8_t c1, c2;
+  getBatteryCharges(&c1, &c2);
+  if(!bat1_charges.isFull()){
+    bat1_charges.enqueue(c1);
+  }
+  if(!bat2_charges.isFull()){
+    bat2_charges.enqueue(c2);
+  }
+  if(bat1_charges.isFull() && bat2_charges.isFull()){
+    uint8_t old_1 = bat1_charges.dequeue();
+    uint8_t old_2 = bat2_charges.dequeue();
+    bat1_charges.enqueue(c1);
+    bat2_charges.enqueue(c2);
+  }
 }
